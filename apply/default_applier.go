@@ -49,6 +49,7 @@ type DefaultApplier struct {
 type ActionName string
 
 const (
+	InitRuntime    ActionName = "InitRuntime"
 	PullIfNotExist ActionName = "PullIfNotExist"
 	MountRootfs    ActionName = "MountRootfs"
 	UnMountRootfs  ActionName = "UnMountRootfs"
@@ -57,6 +58,8 @@ const (
 	UnMountImage   ActionName = "UnMountImage"
 	Init           ActionName = "Init"
 	Upgrade        ActionName = "Upgrade"
+	CheckMasters   ActionName = "CheckMasters"
+	CheckNodes     ActionName = "CheckNodes"
 	ApplyMasters   ActionName = "ApplyMasters"
 	ApplyNodes     ActionName = "ApplyNodes"
 	Guest          ActionName = "Guest"
@@ -65,6 +68,13 @@ const (
 )
 
 var ActionFuncMap = map[ActionName]func(*DefaultApplier) error{
+	InitRuntime: func(applier *DefaultApplier) error {
+		applier.Runtime = runtime.NewDefaultRuntime(applier.ClusterDesired)
+		if applier.Runtime == nil {
+			return fmt.Errorf("failed to init runtime")
+		}
+		return nil
+	},
 	PullIfNotExist: func(applier *DefaultApplier) error {
 		imageName := applier.ClusterDesired.Spec.Image
 		imgSvc, err := image.NewImageService()
@@ -88,10 +98,6 @@ var ActionFuncMap = map[ActionName]func(*DefaultApplier) error{
 		if err := applier.FileSystem.MountRootfs(applier.ClusterDesired, hosts); err != nil {
 			return err
 		}
-		applier.Runtime = runtime.NewDefaultRuntime(applier.ClusterDesired)
-		if applier.Runtime == nil {
-			return fmt.Errorf("failed to init runtime")
-		}
 		return nil
 	},
 	UnMountRootfs: func(applier *DefaultApplier) error {
@@ -112,6 +118,12 @@ var ActionFuncMap = map[ActionName]func(*DefaultApplier) error{
 	Upgrade: func(applier *DefaultApplier) error {
 		return applier.Runtime.Upgrade(applier.ClusterDesired)
 	},
+	CheckMasters: func(applier *DefaultApplier) error {
+		return checkMasters(applier)
+	},
+	CheckNodes: func(applier *DefaultApplier) error {
+		return checkNodes(applier)
+	},
 	ApplyMasters: func(applier *DefaultApplier) error {
 		return applyMasters(applier)
 	},
@@ -131,6 +143,32 @@ var ActionFuncMap = map[ActionName]func(*DefaultApplier) error{
 	CleanFS: func(applier *DefaultApplier) error {
 		return applier.FileSystem.Clean(applier.ClusterDesired)
 	},
+}
+
+func checkMasters(applier *DefaultApplier) error {
+	var err error
+	if applier.ClusterCurrent == nil {
+		err = applier.Runtime.CheckMasters(applier.ClusterDesired.Spec.Masters.IPList)
+	} else {
+		err = applier.Runtime.CheckMasters(applier.MastersToJoin)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkNodes(applier *DefaultApplier) error {
+	var err error
+	if applier.ClusterCurrent == nil {
+		err = applier.Runtime.CheckNodes(applier.ClusterDesired.Spec.Nodes.IPList)
+	} else {
+		err = applier.Runtime.CheckNodes(applier.NodesToJoin)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func applyMasters(applier *DefaultApplier) error {
@@ -205,13 +243,16 @@ func (c *DefaultApplier) diff() (todoList []ActionName, err error) {
 	}
 
 	if c.ClusterCurrent == nil {
+		c.MastersToJoin = c.ClusterDesired.Spec.Masters.IPList[1:]
+		c.NodesToJoin = c.ClusterDesired.Spec.Nodes.IPList
+		todoList = append(todoList, InitRuntime)
+		todoList = append(todoList, CheckMasters)
+		todoList = append(todoList, CheckNodes)
 		todoList = append(todoList, PullIfNotExist)
 		todoList = append(todoList, MountImage)
 		todoList = append(todoList, Config)
 		todoList = append(todoList, MountRootfs)
 		todoList = append(todoList, Init)
-		c.MastersToJoin = c.ClusterDesired.Spec.Masters.IPList[1:]
-		c.NodesToJoin = c.ClusterDesired.Spec.Nodes.IPList
 		todoList = append(todoList, ApplyMasters)
 		todoList = append(todoList, ApplyNodes)
 		todoList = append(todoList, Guest)
@@ -219,6 +260,7 @@ func (c *DefaultApplier) diff() (todoList []ActionName, err error) {
 		return todoList, nil
 	}
 
+	todoList = append(todoList, InitRuntime)
 	todoList = append(todoList, PullIfNotExist)
 	if c.ClusterDesired.Spec.Image != c.ClusterCurrent.Spec.Image {
 		logger.Info("current image is : %s and desired image is : %s , so upgrade your cluster", c.ClusterCurrent.Spec.Image, c.ClusterDesired.Spec.Image)
@@ -228,6 +270,12 @@ func (c *DefaultApplier) diff() (todoList []ActionName, err error) {
 	c.NodesToJoin, c.NodesToDelete = utils.GetDiffHosts(c.ClusterCurrent.Spec.Nodes, c.ClusterDesired.Spec.Nodes)
 	todoList = append(todoList, MountImage)
 	todoList = append(todoList, MountRootfs)
+	if len(c.MastersToJoin) > 0 {
+		todoList = append(todoList, CheckMasters)
+	}
+	if len(c.NodesToJoin) > 0 {
+		todoList = append(todoList, CheckNodes)
+	}
 	if len(c.MastersToJoin) > 0 || len(c.MastersToDelete) > 0 {
 		todoList = append(todoList, ApplyMasters)
 	}

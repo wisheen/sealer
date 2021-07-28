@@ -16,6 +16,7 @@ package runtime
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -28,6 +29,8 @@ import (
 )
 
 const (
+	NodeRequireCPUCount             = 2
+	NodeRequireMemory               = 4
 	RemoteAddIPVS                   = "seautil ipvs --vs %s:6443 %s --health-path /healthz --health-schem https --run-once"
 	RemoteStaticPodMkdir            = "mkdir -p /etc/kubernetes/manifests"
 	RemoteJoinConfig                = `echo "%s" > %s/kubeadm-join-config.yaml`
@@ -39,7 +42,7 @@ const (
 	LvscareStaticPodCmd             = `echo "%s" > %s`
 )
 
-func (d *Default) joinNodes(nodes []string) error {
+func (d *Default) checkNodes(nodes []string) error {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -49,8 +52,34 @@ func (d *Default) joinNodes(nodes []string) error {
 	if err := ssh.WaitSSHReady(d.SSH, nodes...); err != nil {
 		return errors.Wrap(err, "join nodes wait for ssh ready time out")
 	}
-	if err := d.GetJoinTokenHashAndKey(); err != nil {
-		return err
+	for _, node := range nodes {
+		cpuCountStr := d.CmdToString(node, CheckCPU, "")
+		cpuCount, err := strconv.ParseInt(cpuCountStr, 10, 64)
+		if err != nil {
+			cpuCount = 0
+		}
+		if cpuCount == 0 {
+			logger.Warn("get node %s processers count failed", node)
+		} else if cpuCount < NodeRequireCPUCount {
+			return fmt.Errorf("node %s processers count %d less than %d", node, cpuCount, NodeRequireCPUCount)
+		}
+		memoryStr := d.CmdToString(node, CheckMemory, "")
+		memory, err := strconv.ParseInt(memoryStr, 10, 64)
+		if err != nil {
+			memory = 0
+		}
+		if memory == 0 {
+			logger.Warn("get node %s memory failed", node)
+		} else if memory < NodeRequireMemory {
+			return fmt.Errorf("node %s memory %dGB less than %dGB", node, memory, NodeRequireMemory)
+		}
+	}
+	return nil
+}
+
+func (d *Default) joinNodes(nodes []string) error {
+	if len(nodes) == 0 {
+		return nil
 	}
 	var masters string
 	var wg sync.WaitGroup

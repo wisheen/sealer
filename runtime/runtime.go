@@ -32,6 +32,8 @@ type Interface interface {
 	Hook(cluster *v1.Cluster) error
 	Upgrade(cluster *v1.Cluster) error
 	Reset(cluster *v1.Cluster) error
+	CheckMasters(newMastersIPList []string) error
+	CheckNodes(newNodesIPList []string) error
 	JoinMasters(newMastersIPList []string) error
 	JoinNodes(newNodesIPList []string) error
 	DeleteMasters(mastersIPList []string) error
@@ -105,6 +107,16 @@ func (d *Default) Reset(cluster *v1.Cluster) error {
 
 func (d *Default) Upgrade(cluster *v1.Cluster) error {
 	panic("implement upgrade !!")
+}
+
+func (d *Default) CheckMasters(newMastersIPList []string) error {
+	logger.Debug("check masters: %v", newMastersIPList)
+	return d.checkMasters(newMastersIPList)
+}
+
+func (d *Default) CheckNodes(newNodesIPList []string) error {
+	logger.Debug("check nodes: %v", newNodesIPList)
+	return d.checkNodes(newNodesIPList)
 }
 
 func (d *Default) JoinMasters(newMastersIPList []string) error {

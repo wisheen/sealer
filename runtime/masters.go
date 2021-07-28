@@ -41,6 +41,10 @@ const (
 )
 
 const (
+	CheckCPU                = "cat /proc/cpuinfo 2>/dev/null | grep processor | wc -l"
+	CheckMemory             = "free -g | awk 'NR==2{print}' | awk '{print $2}'"
+	MasterRequireCPUCount   = 2
+	MasterRequireMemory     = 4
 	RemoteAddEtcHosts       = "echo %s >> /etc/hosts"
 	RemoteUpdateEtcHosts    = `sed "s/%s/%s/g" < /etc/hosts > hosts && /usr/bin/cp -f hosts /etc/hosts`
 	RemoteCopyKubeConfig    = `rm -rf .kube/config && mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config`
@@ -300,7 +304,7 @@ func (d *Default) GetRemoteHostName(hostIP string) string {
 	return strings.ToLower(hostName)
 }
 
-func (d *Default) joinMasters(masters []string) error {
+func (d *Default) checkMasters(masters []string) error {
 	if len(masters) == 0 {
 		return nil
 	}
@@ -309,6 +313,35 @@ func (d *Default) joinMasters(masters []string) error {
 	}
 	if err := ssh.WaitSSHReady(d.SSH, masters...); err != nil {
 		return errors.Wrap(err, "join masters wait for ssh ready time out")
+	}
+	for _, master := range masters {
+		cpuCountStr := d.CmdToString(master, CheckCPU, "")
+		cpuCount, err := strconv.ParseInt(cpuCountStr, 10, 64)
+		if err != nil {
+			cpuCount = 0
+		}
+		if cpuCount == 0 {
+			logger.Warn("get master %s processers count failed", master)
+		} else if cpuCount < MasterRequireCPUCount {
+			return fmt.Errorf("master %s processers count %d less than %d", master, cpuCount, MasterRequireCPUCount)
+		}
+		memoryStr := d.CmdToString(master, CheckMemory, "")
+		memory, err := strconv.ParseInt(memoryStr, 10, 64)
+		if err != nil {
+			memory = 0
+		}
+		if memory == 0 {
+			logger.Warn("get master %s memory failed", master)
+		} else if memory < MasterRequireMemory {
+			return fmt.Errorf("master %s memory %dGB less than %dGB", master, memory, MasterRequireMemory)
+		}
+	}
+	return nil
+}
+
+func (d *Default) joinMasters(masters []string) error {
+	if len(masters) == 0 {
+		return nil
 	}
 	if err := d.GetJoinTokenHashAndKey(); err != nil {
 		return err
